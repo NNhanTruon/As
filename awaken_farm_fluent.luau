@@ -75,7 +75,6 @@ local Window = Fluent:CreateWindow({
     MinimizeKey = Enum.KeyCode.LeftControl
 })
 
--- Tạo 2 Tab riêng biệt
 local Tabs = { 
     Main = Window:AddTab({ Title = "Evo Farm", Icon = "sword" }),
     AutoJoin = Window:AddTab({ Title = "Auto Join", Icon = "door-open" })
@@ -156,8 +155,15 @@ local function loadCurrentFarmedMat()
     return ""
 end
 
-local function saveAutoJoinConfig(mode, world, difficulty, act, enabled)
+-- Sửa logic hàm Save: Đảm bảo dữ liệu dạng Object đồng bộ chuẩn JSON string
+local function saveAutoJoinConfig()
     if not hasWrite then return end
+    local mode = Options.StageMode and Options.StageMode.Value or "Story"
+    local world = Options.StageMap and Options.StageMap.Value or "GT City"
+    local difficulty = Options.StageDiff and Options.StageDiff.Value or "Normal"
+    local act = Options.StageAct and tonumber(Options.StageAct.Value) or 1
+    local enabled = Options.AutoJoinStage and Options.AutoJoinStage.Value or false
+    
     local config = { mode = mode, world = world, difficulty = difficulty, act = act, enabled = enabled }
     pcall(function() writefile("EFarmAutoJoin.txt", HttpService:JSONEncode(config)) end)
 end
@@ -269,7 +275,7 @@ for _, u in ipairs(units) do
 end
 
 -- ===================================================================
--- CONFIG CHI TIẾT TAB 1: EVO FARM (TỰ ĐỘNG THEO DÕI NGUYÊN LIỆU UNIT)
+-- CONFIG CHI TIẾT TAB 1: EVO FARM
 -- ===================================================================
 Tabs.Main:AddParagraph({
     Title = "Evo Material Farmer",
@@ -375,7 +381,7 @@ local autoFarmToggle = Tabs.Main:AddToggle("AutoFarm", {
 
 
 -- ===================================================================
--- CONFIG CHI TIẾT TAB 2: AUTO JOIN (TỰ CHỌN MÀN CHƠI THỦ CÔNG)
+-- CONFIG CHI TIẾT TAB 2: AUTO JOIN (ĐÃ FIX LỖI KHÔNG LƯU CONFIG)
 -- ===================================================================
 Tabs.AutoJoin:AddParagraph({ 
     Title = "Hệ thống thiết lập phòng chơi", 
@@ -386,21 +392,25 @@ local stageModeDropdown = Tabs.AutoJoin:AddDropdown("StageMode", {
     Title = "Chế độ (Mode)",
     Values = {"Story", "Squadron", "Raid", "Challenge"}, Multi = false, Default = 1,
 })
+stageModeDropdown:OnChanged(function() saveAutoJoinConfig() end)
 
 local stageMapDropdown = Tabs.AutoJoin:AddDropdown("StageMap", {
     Title = "Bản đồ (Map)",
     Values = MAP_LIST, Multi = false, Default = 1,
 })
+stageMapDropdown:OnChanged(function() saveAutoJoinConfig() end)
 
 local stageDiffDropdown = Tabs.AutoJoin:AddDropdown("StageDiff", {
     Title = "Độ khó (Difficulty)",
     Values = {"Normal", "Hard"}, Multi = false, Default = 1,
 })
+stageDiffDropdown:OnChanged(function() saveAutoJoinConfig() end)
 
 local stageActDropdown = Tabs.AutoJoin:AddDropdown("StageAct", {
     Title = "Hồi (Act)",
     Values = {"1", "2", "3", "4", "5", "6", "7", "8", "9", "10"}, Multi = false, Default = 1,
 })
+stageActDropdown:OnChanged(function() saveAutoJoinConfig() end)
 
 local autoJoinEnabled = false
 local autoJoinToggle = Tabs.AutoJoin:AddToggle("AutoJoinStage", {
@@ -462,7 +472,7 @@ local function enterGameManual()
     local act = tonumber(stageActDropdown.Value) or 1
     
     saveCurrentFarmedMat("MANUAL_STAGE")
-    saveAutoJoinConfig(mode, world, diff, act, true)
+    saveAutoJoinConfig() -- Đồng bộ trạng thái File trước khi dịch chuyển
 
     local ok, err = create_room:InvokeServer({
         boosted = true, act = act, difficulty = diff,
@@ -527,7 +537,6 @@ if gameEnding then
 
         -- Ưu tiên 1: Đang bật Auto Join Stage thủ công ở Tab 2
         if autoJoinEnabled then
-            Fluent:Notify({ Title = "Auto Join Stage", Content = "Hết trận! Tiến hành Replay màn chơi thủ công...", Duration = 4 })
             if gameReplay then pcall(function() gameReplay:FireServer() end) end
             return
         end
@@ -542,7 +551,6 @@ if gameEnding then
         end
 
         if not u or u.numMissing == 0 then
-            Fluent:Notify({ Title = "HOÀN THÀNH!", Content = "Unit đã thu thập đủ toàn bộ nguyên liệu!", Duration = 10 })
             setFarmOff()
             if gameTeleport then pcall(function() gameTeleport:FireServer() end) end
             return
@@ -565,12 +573,8 @@ if gameEnding then
         end
 
         if curMatDone then
-            Fluent:Notify({ Title = "Đủ nguyên liệu!", Content = (trackedMat or "Vật phẩm") .. " đã gom xong! Trở về sảnh để đổi map...", Duration = 5 })
             if gameTeleport then pcall(function() gameTeleport:FireServer() end) end
         else
-            local currentHave = playerItems[trackedMat] or playerStats[trackedMat] or 0
-            local neededAmount = u.fullCost[trackedMat] or 0
-            Fluent:Notify({ Title = "Tiếp tục farm", Content = "Vẫn thiếu " .. tostring(trackedMat) .. " (" .. tostring(currentHave) .. "/" .. tostring(neededAmount) .. "). Đang Replay...", Duration = 4 })
             if gameReplay then pcall(function() gameReplay:FireServer() end) end
         end
     end)
@@ -583,32 +587,18 @@ local function doFarmLoop()
     refreshData(u)
     logMaterialStatus(u)
 
-    if u.numMissing == 0 then
-        Fluent:Notify({ Title = "HOÀN THÀNH!", Content = "Unit đã thu thập đủ nguyên liệu!", Duration = 10 })
-        setFarmOff(); return
-    end
-
-    if not getFirstDrop(u) then
-        Fluent:Notify({ Title = "Lỗi hệ thống", Content = "Không quét được vị trí rơi của nguyên liệu này!", Duration = 5 })
-        setFarmOff(); return
-    end
+    if u.numMissing == 0 then setFarmOff(); return end
+    if not getFirstDrop(u) then setFarmOff(); return end
 
     if inHub and create_room and start_remote then
-        if not enterGame(u) then
-            Fluent:Notify({ Title = "Thất bại", Content = "Không thể khởi tạo phòng game tự động!", Duration = 3 })
-            setFarmOff(); return
-        end
+        if not enterGame(u) then setFarmOff(); return end
     end
-
     while farming do task.wait(5) end
 end
 
 local function doAutoJoinLoop()
     if inHub and create_room and start_remote then
-        if not enterGameManual() then
-            Fluent:Notify({ Title = "Thất bại", Content = "Không thể khởi tạo phòng chơi chỉ định!", Duration = 3 })
-            setAutoJoinOff(); return
-        end
+        if not enterGameManual() then setAutoJoinOff(); return end
     end
     while autoJoinEnabled do task.wait(5) end
 end
@@ -635,13 +625,12 @@ end)
 
 autoFarmToggle:OnChanged(function(value)
     if value and autoJoinEnabled then
-        Fluent:Notify({ Title = "Xung đột tính năng", Content = "Vui lòng tắt Auto Join Stage ở Tab bên cạnh trước!", Duration = 4 })
+        Fluent:Notify({ Title = "Xung đột", Content = "Vui lòng tắt Auto Join Stage trước!", Duration = 4 })
         autoFarmToggle:SetValue(false)
         return
     end
 
     if not value and farming and isActuallyInGame() and not allowToggleOff then
-        Fluent:Notify({ Title = "Hạn chế", Content = "Không được tắt Auto Farm khi đang xử lý dữ liệu trận đấu!", Duration = 3 })
         autoFarmToggle:SetValue(true)
         return
     end
@@ -649,40 +638,32 @@ autoFarmToggle:OnChanged(function(value)
     if value then
         if inHub then
             if not selectedUnit then return end
-            if selectedUnit.numMissing == 0 then
-                Fluent:Notify({ Title = "Bỏ qua", Content = "Unit này đã hoàn tất thu thập!", Duration = 3 })
-                setFarmOff(); return
-            end
-            Fluent:Notify({ Title = "Auto Farm", Content = "Bắt đầu chuỗi farm nguyên liệu cho " .. selectedUnit.name, Duration = 4 })
+            if selectedUnit.numMissing == 0 then setFarmOff(); return end
             task.spawn(doFarmLoop)
-        else
-            Fluent:Notify({ Title = "Auto Farm", Content = "Đang trong trận - Trình theo dõi đang chạy nền...", Duration = 4 })
         end
     end
 end)
 
 autoJoinToggle:OnChanged(function(value)
     if value and farming then
-        Fluent:Notify({ Title = "Xung đột tính năng", Content = "Vui lòng tắt Auto Farm ở Tab bên cạnh trước!", Duration = 4 })
+        Fluent:Notify({ Title = "Xung đột", Content = "Vui lòng tắt Auto Farm bên Tab 1 trước!", Duration = 4 })
         autoJoinToggle:SetValue(false)
         return
     end
 
     if not value and autoJoinEnabled and isActuallyInGame() and not allowToggleOff then
-        Fluent:Notify({ Title = "Hạn chế", Content = "Không được tắt Auto Join khi màn chơi đang diễn ra!", Duration = 3 })
         autoJoinToggle:SetValue(true)
         return
     end
 
     autoJoinEnabled = value
-    saveAutoJoinConfig(stageModeDropdown.Value, stageMapDropdown.Value, stageDiffDropdown.Value, tonumber(stageActDropdown.Value) or 1, value)
+    saveAutoJoinConfig() -- Cập nhật trạng thái bật/tắt vào file ngay lập tức
 
     if value then
         if inHub then
-            Fluent:Notify({ Title = "Auto Join Stage", Content = "Bắt đầu tạo phòng chơi theo cấu hình...", Duration = 4 })
             task.spawn(doAutoJoinLoop)
         else
-            Fluent:Notify({ Title = "Auto Join Stage", Content = "Đang trong game - Sẽ kích hoạt Auto Replay khi kết thúc.", Duration = 4 })
+            Fluent:Notify({ Title = "Auto Join Stage", Content = "Đang trong game - Sẽ tự động Replay khi hết trận.", Duration = 4 })
         end
     end
 end)
@@ -700,9 +681,9 @@ SaveManager:BuildConfigSection(TabsS)
 Window:SelectTab(1)
 SaveManager:LoadAutoloadConfig()
 
--- KHỞI TẠO ĐỒNG BỘ CONFIG CŨ
+-- KHỞI TẠO ĐỒNG BỘ CONFIG CŨ CHUẨN XÁC
 task.spawn(function()
-    task.wait(1)
+    task.wait(0.5)
     
     local savedJoin = loadAutoJoinConfig()
     if savedJoin then
@@ -710,6 +691,7 @@ task.spawn(function()
         pcall(function() stageMapDropdown:SetValue(savedJoin.world) end)
         pcall(function() stageDiffDropdown:SetValue(savedJoin.difficulty) end)
         pcall(function() stageActDropdown:SetValue(tostring(savedJoin.act)) end)
+        task.wait(0.2)
         if savedJoin.enabled and not farming then
             autoJoinToggle:SetValue(true)
         end
@@ -735,5 +717,5 @@ task.spawn(function()
     end
 end)
 
-Fluent:Notify({ Title = "Hệ thống", Content = "Khởi chạy UI thành công! Đã tách biệt không gian điều hướng.", Duration = 6 })
+Fluent:Notify({ Title = "Hệ thống", Content = "Đã sửa xong lỗi lưu Config Auto Join Stage!", Duration = 5 })
  
